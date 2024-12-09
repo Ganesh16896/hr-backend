@@ -205,76 +205,66 @@ exports.UserAttendance = async (req, res) => {
   }
 };
 
-// Edit Attendance (Clock In / Clock Out)
+// Edit Attendance
 exports.editAttendance = async (req, res) => {
   try {
-    const { clockIn, clockOut } = req.body;
-    const { id } = req.params; // Extract the attendance record ID from the URL
-
-    // Validate that attendanceId is provided
+    const { id } = req.params; // Extract attendance record ID from params
+    const { clockIn, clockOut } = req.body; // Extract clockIn and clockOut from the request body
+    // Validate that attendance ID is provided
     if (!id) {
       return res.status(400).json({ message: "Attendance ID is required" });
     }
-
     // Find the attendance record by ID
     const attendance = await Attendance.findById(id);
-
     if (!attendance) {
       return res.status(404).json({ message: "Attendance record not found" });
     }
 
-    // Prepare update object
     const updateFields = {};
 
-    // Helper function to parse time strings like "10:30 AM"
-    const parseTime = (timeString, existingDate) => {
-      const [time, period] = timeString.split(" ");
-      const [hours, minutes] = time.split(":").map(Number);
-      const date = new Date(existingDate);
-
-      if (isNaN(hours) || isNaN(minutes) || !["AM", "PM"].includes(period)) {
-        throw new Error("Invalid time format");
-      }
-
-      date.setHours(period === "PM" && hours < 12 ? hours + 12 : hours % 12);
-      date.setMinutes(minutes);
-      date.setSeconds(0);
-      return date;
-    };
-
-    // Edit clockIn if provided
     if (clockIn) {
-      try {
-        updateFields.clockIn = parseTime(
-          clockIn,
-          attendance.clockIn || new Date()
-        );
-      } catch (error) {
+      const clockInDate = new Date(clockIn);
+      if (isNaN(clockInDate.getTime())) {
         return res
           .status(400)
           .json({ message: `Invalid clockIn time: ${clockIn}` });
       }
+      updateFields.clockIn = clockInDate;
     }
 
-    // Edit clockOut if provided
+    // Validate and update clockOut
     if (clockOut) {
-      try {
-        updateFields.clockOut = parseTime(
-          clockOut,
-          attendance.clockOut || new Date()
-        );
-      } catch (error) {
+      const clockOutDate = new Date(clockOut);
+      if (isNaN(clockOutDate.getTime())) {
         return res
           .status(400)
           .json({ message: `Invalid clockOut time: ${clockOut}` });
       }
+      updateFields.clockOut = clockOutDate;
     }
 
-    if (clockIn || clockOut) {
-      updateFields.updatedAt = new Date(); // Update the last updated timestamp
+    // Calculate total hours if both clockIn and clockOut are present
+    if (updateFields.clockIn || updateFields.clockOut) {
+      const clockInTime = updateFields.clockIn
+        ? new Date(updateFields.clockIn).getTime()
+        : attendance.clockIn.getTime();
+
+      const clockOutTime = updateFields.clockOut
+        ? new Date(updateFields.clockOut).getTime()
+        : attendance.clockOut?.getTime();
+
+      if (clockInTime && clockOutTime) {
+        updateFields.totalHours = (
+          (clockOutTime - clockInTime) /
+          (1000 * 60 * 60)
+        ).toFixed(2);
+      }
     }
 
-    // Update the record with the new fields
+    // Update the last updated timestamp
+    updateFields.updatedAt = new Date();
+
+    // Update attendance record
     const updatedAttendance = await Attendance.findByIdAndUpdate(
       id,
       updateFields,
@@ -285,27 +275,6 @@ exports.editAttendance = async (req, res) => {
       return res.status(400).json({ message: "Failed to update attendance" });
     }
 
-    // Calculate total working hours if both clockIn and clockOut are available
-    if (updatedAttendance.clockIn && updatedAttendance.clockOut) {
-      const clockInTime = new Date(updatedAttendance.clockIn).getTime();
-      const clockOutTime = new Date(updatedAttendance.clockOut).getTime();
-
-      if (clockOutTime >= clockInTime) {
-        updatedAttendance.totalHours = (
-          (clockOutTime - clockInTime) /
-          (1000 * 60 * 60)
-        ).toFixed(2);
-      } else {
-        return res
-          .status(400)
-          .json({ message: "Clock-out time cannot be before clock-in time" });
-      }
-    }
-
-    // Save the updated attendance record
-    await updatedAttendance.save();
-
-    // Return the updated attendance record
     res.status(200).json({
       message: "Attendance record updated successfully",
       attendance: updatedAttendance,
